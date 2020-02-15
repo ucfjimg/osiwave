@@ -1,0 +1,19 @@
+This code attempts to recover Kansas City Standard data from audio tape. It manages
+with decent success on the small sample of tapes I have.
+
+The utility expects an uncompressed wave file, 16 bits at 44 kHz (CD quality), mono.
+You can also give it stereo and it will only use the first channel. You can easily
+record the wave file with any audio editing program like Audacity.
+
+There are two command line options:
+
+-c # - tells osiwave to ignore the first # samples. This is useful if tape leader
+noise or tone gets translated into garbage.
+
+-d # - tells osiwave the size of the window to use for DC averaging. Playing with
+this value can improve accuracy; it's a parameter for filtering the audio before
+running the detection stage on it. The default is 96 and values between 64 and 256
+are probably the most useful.
+
+Have fun!
+
