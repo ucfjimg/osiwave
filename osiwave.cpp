@@ -323,8 +323,23 @@ int main(int argc, char **argv)
     vector<int16_t> data;
 
     try {
-        data = readWave(waveFile);
-    } catch (runtime_error re) {
+        WaveReader reader{ waveFile };
+        if (reader.getSampleRate() != 44100) {
+            cerr << "file must be 44kHz" << endl;
+            return 1;
+        }
+
+        while (true) {
+            vector<int16_t> chunk = reader.readSamples(4096);
+            if (chunk.empty()) {
+                break;
+            }
+
+            for (int16_t s : chunk) {
+                data.push_back(s);
+            }
+        }
+   } catch (runtime_error re) {
         cerr << waveFile << ": " << re.what() << endl;
         return 1;
     }

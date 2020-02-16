@@ -16,223 +16,181 @@ using std::vector;
 
 const int PCM_TAG = 1;
 
-// read the entire binary file into memory, throw an exception
-// on error.
+// Open the file and verify the format
 //
-vector<char> readFile(const string &fname) 
+WaveReader::WaveReader(const string &fname)
+    : sampleRate_(44100)
+    , nchannels_(1)
+    , readChan_(0)
+    , endOfData_(0)
 {
-    vector<char> contents;
+    const string badFile = "file is not a wave file.";
 
-    ifstream in{ fname, ios::binary | ios::ate };
-    if (!in) {
+    in_.open(fname, ios::binary|ios::ate);
+    if (!in_) {
+        throw runtime_error{ "failed to open file." };
+    }
+
+    auto fileSize = in_.tellg();
+    in_.seekg(0);
+
+    if (readFourCC() != "RIFF") {
+        throw runtime_error{ badFile };
+    }
+
+    uint32_t riffChunkSize = readUnsignedWord(4);
+
+    // riffChunkSize is how many bytes is in the WAVE chunk, less the
+    // 8 bytes for RIFF and the following uint32.
+    //
+    if (riffChunkSize + 8 > fileSize || riffChunkSize < 4 || readFourCC() != "WAVE") {
+        throw runtime_error{ badFile };
+    }
+
+    uint32_t left = riffChunkSize - 4;
+
+    uint32_t dataStart = 0;
+
+    // walk the chunks
+    //
+    while (left > 8) {
+        string fcc = readFourCC();
+        uint32_t len = readUnsignedWord(4);
+        left -= 8;
+
+        if (len > left) {
+            throw runtime_error{ badFile };
+        }
+        left -= len;
+
+        if (fcc == "data") {
+            dataStart = in_.tellg();
+            endOfData_ = dataStart + len;
+            continue;
+        }
+
+        if (fcc == "fmt ") {
+            // 16 is the min size for the format struct
+            if (len < 16) {
+                throw runtime_error{ badFile };
+            }
+            // see: WAVEFORMATEX from Win32
+            uint32_t formatTag = readUnsignedWord(2);
+            nchannels_ = readUnsignedWord(2);
+            sampleRate_ = readUnsignedWord(4);
+            uint32_t bytesPerSec = readUnsignedWord(4);
+            uint32_t blockAlign = readUnsignedWord(2);
+            uint32_t bitsPerSample = readUnsignedWord(2);
+
+            // the two restrictions we have on the format are that we only
+            // handle 16-bit PCM.
+            //
+            const int PCM_FORMAT = 1;
+            if (formatTag != PCM_FORMAT || bitsPerSample != 16) {
+                throw runtime_error{ "wave format must be 16-bit PCM." };
+            }
+        }
+    }
+
+    if (dataStart == 0) {
+        // we never found a data chunk
+        throw runtime_error{ badFile };
+    }
+    
+    in_.seekg(dataStart);
+}
+
+// Sets the read channel, which is zero based. If the stream is stereo,
+// 0 is left and 1 is right.
+//
+void WaveReader::setReadChannel(int chan) 
+{
+    if (chan < 0 || chan >= nchannels_) {
         stringstream ss;
-        ss << "Could not open `" << fname << "'.";
+        ss
+            << "attempt to set invalid read channel "
+            << chan
+            << " -- stream only has "
+            << nchannels_
+            << " channels.";
         throw runtime_error{ ss.str() };
     }
 
-    auto nbytes = in.tellg();
-    in.seekg(0);
-
-    contents.resize(nbytes);
-    in.read(contents.data(), nbytes);
-
-    return contents;
+    readChan_ = chan;
 }
 
-// Check for a RIFF fourcc value at a given location in the file.
+// Reads a block of samples of size `nsamples'. Fewer samples may
+// be returned. After all samples have been read, an empty vector
+// will be returned.
 //
-bool checkFourCC(const vector<char>& data, int at, const char *fcc2)
+vector<int16_t> WaveReader::readSamples(uint32_t nsamples)
 {
-    for (int i = 0; i < 4; i++) {
-        if (data[at + i] != fcc2[i]) {
-            return false;
-        }
+    vector<int16_t> data;
+
+    int stride = sizeof(int16_t) * nchannels_;
+    uint32_t nbytes = nsamples * stride;
+    uint32_t left = endOfData_ - in_.tellg();
+
+    if (left == 0) {
+        return data;
     }
- 
-    return true;
+
+    nbytes = std::min(nbytes, left);
+
+    if (readBuf_.size() < nbytes) {
+        readBuf_.resize(nbytes);
+    }
+
+    in_.read(readBuf_.data(), nbytes);
+    if (in_.fail()) {
+        throw runtime_error{ "failed reading samples from stream." };
+    }
+
+    nsamples = nbytes / stride;
+    data.reserve(nsamples);
+
+    int offs = sizeof(int16_t) * readChan_;
+
+    for (uint32_t i = 0; i < nsamples; i++) {
+        uint16_t lo = readBuf_[i * stride + offs] & 0xff;
+        uint16_t hi = readBuf_[i * stride + offs + 1] & 0xff;
+        data.push_back(static_cast<int16_t>((hi << 8) | lo));
+    }
+
+    return data;
 }
 
-// Extract a fourcc value at a given location in the file.
+
+// Read a FourCC code
 //
-string extractFourCC(const vector<char>& data, int at)
+string WaveReader::readFourCC()
 {
-    string fourcc;
+    char fcc[5];
 
-    for (int i = 0; i < 4; i++) {
-        fourcc += data[at + i];
+    in_.read(fcc, 4);
+    if (in_.fail()) {
+        throw runtime_error{ "premature end of file on wave file." };
     }
-
-    return fourcc;
+    fcc[4] = '\0';
+    return fcc;
 }
 
-// Extract a little-endian 16-bit value from the file.
+// Read a little-endian word of up to 4 bytes
 //
-uint16_t extract16(const vector<char>& data, int at)
+uint32_t WaveReader::readUnsignedWord(int nbytes)
 {
-    uint16_t result = 0;
+    uint32_t ui = 0;
+    char bytes[4];
 
-    for (int i = 1; i >= 0; i--) {
-        uint8_t b = static_cast<uint8_t>(data[at + i]);
-        result = result * 256 + b;
+    in_.read(bytes, nbytes);
+    if (in_.fail()) {
+        throw runtime_error{ "premature end of file on wave file." };
     }
 
-    return result;
-}
-
-// Extract a little-endian 32-bit value from the file.
-//
-uint32_t extract32(const vector<char>& data, int at)
-{
-    uint32_t result = 0;
-
-    for (int i = 3; i >= 0; i--) {
-        uint8_t b = static_cast<uint8_t>(data[at + i]);
-        result = result * 256 + b;
+    for (int i = nbytes-1; i >= 0; i--) {
+        ui <<= 8;
+        ui += static_cast<uint8_t>(bytes[i]);
     }
 
-    return result;
-}
-
-// Read a wave file and return the sampled audio. The file must
-// be 44100 kHz and PCM. If it is multiple channels, only the 
-// first will be returned.
-//
-vector<int16_t> readWave(const string &fname)
-{
-    vector<char> data = readFile(fname);
-
-    // offsets of important header bits
-    //
-    const int OFF_RIFF = 0;
-    const int OFF_RIFFSIZE = 4;
-    const int OFF_WAVE = 8;
-    const int OFF_CHUNKDATA = 12;
-
-    if (
-        data.size() < OFF_CHUNKDATA || 
-        !checkFourCC(data, OFF_RIFF, "RIFF") || 
-        !checkFourCC(data, OFF_WAVE, "WAVE") 
-    ) {
-        throw runtime_error{ "not a wave file" };
-    }
-
-    // Walk the RIFF structure and find the format and data chunks
-    //
-    int waveChunkSize = extract32(data, OFF_RIFFSIZE) - sizeof(uint32_t);
-    int at = OFF_CHUNKDATA;
-
-    int fmtAt = -1;
-    int fmtLen = 0;
-    int dataAt = -1;
-    int dataLen = 0;
-
-    while (at < waveChunkSize) {
-        if (checkFourCC(data, at, "fmt ")) {
-            fmtAt = at + 2 * sizeof(uint32_t);
-            fmtLen = extract32(data, at + sizeof(uint32_t));
-        }
-
-        if (checkFourCC(data, at, "data")) {
-            dataAt = at + 2 * sizeof(uint32_t);
-            dataLen = extract32(data, at + sizeof(uint32_t));
-        }
-
-        at += 2 * sizeof(uint32_t) + extract32(data, at + sizeof(uint32_t));
-    }
-
-    // Verify supported format
-    //
-    const int OFF_FORMAT_TAG = 0;
-    const int OFF_CHANNELS = 2;
-    const int OFF_SAMPLE_RATE = 4;
-    const int OFF_BIT_DEPTH = 14;
-    const int FMT_MIN_SIZE = 16;
-
-
-    if (fmtAt == -1 || dataAt == -1 || fmtLen < FMT_MIN_SIZE) {
-        throw runtime_error{ "Wave file is corrupt (does not contain format and/or data)." };
-    }
-
-    int format = extract16(data, fmtAt + OFF_FORMAT_TAG);
-    int channels = extract16(data, fmtAt + OFF_CHANNELS);
-    int sampleRate = extract32(data, fmtAt + OFF_SAMPLE_RATE);
-    int bitDepth = extract16(data, fmtAt + OFF_BIT_DEPTH);
-
-    if (
-        format != 1 ||
-        (channels != 1 && channels != 2) ||
-        sampleRate != 44100 ||
-        bitDepth != 16
-    ) {
-        throw runtime_error{ "Wave file must be 44Khz mono/stereo PCM." };
-    }
-
-    vector<int16_t> waveData;
-    int stride = (channels == 1) ? 2 : 4;
-
-    int end = dataAt + dataLen;
-    for (; dataAt < end; dataAt += stride) {
-        waveData.push_back(static_cast<int16_t>(extract16(data, dataAt)));
-    }
-
-    return waveData;
-}
-
-void put16(ofstream &out, int val) 
-{
-    for (int i = 0; i < 2; i++) {
-        char ch = val & 0xff;
-        out.write(&ch, 1);
-        val >>= 8;
-    }
-}
-
-void put32(ofstream &out, int val) 
-{
-    for (int i = 0; i < 4; i++) {
-        char ch = val & 0xff;
-        out.write(&ch, 1);
-        val >>= 8;
-    }
-}
-
-
-void writeWave(const std::string &fname, const std::vector<int16_t> &data)
-{
-    ofstream out{ fname, ios::out | ios::binary };
-    if (!out) {
-        throw runtime_error{ "Could not open output file." };
-    }
-
-    int dataBytes = data.size() * 2;
-    int fmtSize = 16;
-
-    int riffSize = 
-        4 +         // WAVE
-        4 +         // fmt 
-        4 +         // fmt chunk size
-        fmtSize +
-        4 +         // data
-        4 +         // data chunk size
-        dataBytes;
-
-    out << "RIFF";
-    put32(out, riffSize);
-    out << "WAVEfmt ";
-    put32(out, fmtSize);
-
-    // see: WAVEFORMATEX from Win32
-    put16(out, PCM_TAG);        // wFormatTag
-    put16(out, 1);              // nChannels
-    put32(out, 44100);          // nSamplesPerSec
-    put32(out, 2*44100);        // nAvgBytesPerSec
-    put16(out, 2);              // nBlockAlign
-    put16(out, 16);             // nBitsPerSample
-
-    out << "data";
-    put32(out, dataBytes);
-
-    for (int val : data) {
-        put16(out, val);
-    }
+    return ui;
 }
