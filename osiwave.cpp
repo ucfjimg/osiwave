@@ -1,5 +1,6 @@
 #include "wave.h"
 #include "dcfilter.h"
+#include "xcross.h"
 
 #include <cassert>
 #include <cmath>
@@ -38,12 +39,6 @@ enum Value {
     Noise,   // anything else
 };
 
-// the location of zero crossing in the analog data
-struct ZeroCrossing {
-  int sample;
-  double timeStamp;
-};
-
 // a span of one detected value in the analog data
 struct Span {
     int sample;
@@ -77,61 +72,20 @@ string valueStr(Value v)
     return "?unknown";
 }
 
-// Given the sample data, return an array of all the zero crossing positions
-// in seconds.
-//
-vector<ZeroCrossing> findZeroCrossings(const vector<int16_t> &data)
-{
-    vector<ZeroCrossing> zeroCrossings;
-
-    for (int i = 0; i < data.size() - 1; i++) {
-        if (data[i] == 0) {
-            int s = i;            
-            while (i < data.size() - 1 && data[i+1] == 0) {
-                i++;
-            }
-            int nz = i-s+1;
-
-            // interpolate based on multiple zeroes (or exactly 
-            // on sample if there's only one)
-            double t = i * SEC_PER_SAMPLE + (nz - 1) * 0.5;
-            zeroCrossings.push_back(ZeroCrossing{ i, t });
-            continue;
-        }
-
-        int yl = data[i];
-        int yr = data[i+1];
-
-
-        // if there's a crossing, interpolate
-        // the crossing between samples    
-        if (yl < 0 && yr > 0) {
-            double num = -yl;
-            double den = yr - yl;
-            double t = num / den;
-            t = (i + t) * SEC_PER_SAMPLE;
-
-            zeroCrossings.push_back(ZeroCrossing{ i, t });
-        }
-    }
-
-    return zeroCrossings;
-}
 
 // From zero crossings, compute contiguous spans of our interesting frequencies.
 // 1200 hz (or thereabouts) == zero (SPACE)
 // 2400 hz == one (MARK)
 //
-vector<Span> buildFrequencySpans(const vector<ZeroCrossing> &zeroCrossings)
+vector<Span> buildFrequencySpans(const vector<double> &zeroCrossings)
 {
     vector<Span> spans;
 
     Value value = Noise;
     double start = 0;
 
-    int startSample = zeroCrossings[0].sample;
     for (int i = 1; i < zeroCrossings.size(); i++) {
-        double dt = zeroCrossings[i].timeStamp - zeroCrossings[i-1].timeStamp;
+        double dt = zeroCrossings[i] - zeroCrossings[i-1];
         double freq = 1.0 / dt;
 
         Value nextValue = Noise;
@@ -147,10 +101,9 @@ vector<Span> buildFrequencySpans(const vector<ZeroCrossing> &zeroCrossings)
         }
 
         if (nextValue != value) {
-            spans.push_back(Span{ startSample, value, zeroCrossings[i-1].timeStamp - start });
+            spans.push_back(Span{ 0, value, zeroCrossings[i-1] - start });
             value = nextValue;
-            start = zeroCrossings[i-1].timeStamp;
-            startSample = zeroCrossings[i-1].sample;
+            start = zeroCrossings[i-1];
         }
     }
 
@@ -322,20 +275,20 @@ int main(int argc, char **argv)
 
 
     DCFilter dcFilter{ *reader.get(), dcwin };
+    ZeroCrossFilter zeroCross{ dcFilter, reader->getSampleRate() };
+
+    vector<double> zeroCrossings;
+    
     while (true) {
-        vector<int16_t> chunk = dcFilter.readSamples(4096);
-        if (chunk.empty()) {
+        vector<double> chunk = zeroCross.getTimestamps(4096);
+        if (chunk.size() == 0) {
             break;
         }
 
-        for (int16_t s : chunk) {
-            data.push_back(s);
+        for (double t : chunk) {
+            zeroCrossings.push_back(t);
         }
     }
-
-
-
-    vector<ZeroCrossing> zeroCrossings = findZeroCrossings(data);
 
     if (zeroCrossings.size() == 0) {
         cout << "no data found (no zero crossings)" << endl;

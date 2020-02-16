@@ -50,7 +50,6 @@ vector<int16_t> DCFilter::readSamples(uint32_t nsamples)
     }
 
     if (nsamples == 0) {
-        cout << "dc  : returning " << out.size() << " bytes" << endl;
         return out;
     }
 
@@ -70,7 +69,6 @@ vector<int16_t> DCFilter::readSamples(uint32_t nsamples)
             sampleOut_ = (sampleOut_ + 1) % window_;
         }
 
-        cout << "dc  : returning " << out.size() << " bytes [eof]" << endl;
         return out;
     }
 
