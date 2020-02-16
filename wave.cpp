@@ -1,11 +1,15 @@
 #include "wave.h"
 
 #include <fstream>
+#include <iostream>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
+using std::cout;
+using std::ios_base;
+using std::endl;
 using std::ifstream;
 using std::ios;
 using std::ofstream;
@@ -98,6 +102,16 @@ WaveReader::WaveReader(const string &fname)
     }
     
     in_.seekg(dataStart);
+}
+
+// Skip ahead in the stream by the given number of samples.
+//
+void WaveReader::skip(uint32_t nsamples)
+{
+    int stride = sizeof(int16_t) * nchannels_;
+    uint32_t nbytes = nsamples * stride;
+
+    in_.seekg(nbytes, ios_base::cur);
 }
 
 // Sets the read channel, which is zero based. If the stream is stereo,

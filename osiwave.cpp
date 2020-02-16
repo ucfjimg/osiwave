@@ -1,4 +1,5 @@
 #include "wave.h"
+#include "dcfilter.h"
 
 #include <cassert>
 #include <cmath>
@@ -6,6 +7,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -21,6 +23,7 @@ using std::runtime_error;
 using std::ifstream;
 using std::string;
 using std::stringstream;
+using std::unique_ptr;
 using std::vector;
 
 const int SAMPLE_RATE = 44100;
@@ -72,30 +75,6 @@ string valueStr(Value v)
     }
 
     return "?unknown";
-}
-
-// Given a set of samples, try to clean it up to be symmetric about
-// DC (zero).
-//
-void normalizeAboutDC(vector<int16_t> &data, int dcwin)
-{
-    vector<int16_t> average;
-
-    int i = 0;
-    int sum = 0;
-    for (; i < dcwin; i++) {
-        sum += data[i];
-    }
-
-    for (; i < data.size(); i++) {
-        average.push_back(sum / dcwin);
-        sum -= data[i-dcwin];
-        sum += data[i];
-    }
-
-    for (int i = 0; i < average.size(); i++) {
-        data[i + dcwin/2] -= average[i];
-    }
 }
 
 // Given the sample data, return an array of all the zero crossing positions
@@ -322,38 +301,40 @@ int main(int argc, char **argv)
     string waveFile = argv[optind];
     vector<int16_t> data;
 
+    unique_ptr<WaveReader> reader;
+
     try {
-        WaveReader reader{ waveFile };
-        if (reader.getSampleRate() != 44100) {
+        reader = unique_ptr<WaveReader>{ new WaveReader{ waveFile } };
+        if (reader->getSampleRate() != 44100) {
             cerr << "file must be 44kHz" << endl;
             return 1;
         }
-
-        while (true) {
-            vector<int16_t> chunk = reader.readSamples(4096);
-            if (chunk.empty()) {
-                break;
-            }
-
-            for (int16_t s : chunk) {
-                data.push_back(s);
-            }
-        }
-   } catch (runtime_error re) {
+    } catch (runtime_error re) {
         cerr << waveFile << ": " << re.what() << endl;
         return 1;
     }
 
-    if (clip >= data.size()) {
-        cerr << "clip size " << clip << " would leave no samples." << endl;
-    }
-
+    // NB we have to do this before constructing the filter chain as 
+    // filters may prefill data in their constructors.
     if (clip) {
-        cout << "trimming " << clip << " samples from start of wave" << endl;
-        data.erase(data.begin(), data.begin() + clip);
+        reader->skip(clip);
     }
 
-    normalizeAboutDC(data, dcwin);
+
+    DCFilter dcFilter{ *reader.get(), dcwin };
+    while (true) {
+        vector<int16_t> chunk = dcFilter.readSamples(4096);
+        if (chunk.empty()) {
+            break;
+        }
+
+        for (int16_t s : chunk) {
+            data.push_back(s);
+        }
+    }
+
+
+
     vector<ZeroCrossing> zeroCrossings = findZeroCrossings(data);
 
     if (zeroCrossings.size() == 0) {

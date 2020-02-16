@@ -13,6 +13,7 @@ public:
     int getSampleRate() const { return sampleRate_; }
     int getChannels() const { return nchannels_; }
 
+    void skip(uint32_t nsamples);
     void setReadChannel(int chan);
     std::vector<int16_t> readSamples(uint32_t nsamples);
 
