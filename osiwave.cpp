@@ -2,6 +2,7 @@
 #include "dcfilter.h"
 #include "xcross.h"
 #include "freqspan.h"
+#include "denoise.h"
 
 #include <cassert>
 #include <cmath>
@@ -47,56 +48,6 @@ struct Char {
     char ch;
 };
 
-// Remove noise. Attempt to figure out what the noise value should be
-// by looking on either side and seeing which side would make a better
-// clock pulse width by adding the noise duration to it.
-//
-void removeNoise(vector<FreqSpanFilter::Span> &spans) 
-{
-    for (int i = 1; i < spans.size()-1;) {
-        if (spans[i].value != FreqSpanFilter::Noise) {
-            i++;
-            continue;
-        }
-
-        // how far from an integral number of clocks is the given
-        // period in milliseconds
-        auto dFromClock = [](double l) {
-            double clk = (l * 1000) / MS_PER_CLOCK;
-            clk -= int(clk);
-            if (clk > 0.5) {
-                clk = 1.0 - clk;
-            }
-
-            return clk;
-        };
-
-        if (dFromClock(spans[i-1].length) > dFromClock(spans[i+1].length)) {
-            spans[i-1].length += spans[i].length;
-        } else {
-            spans[i+1].length += spans[i].length;
-        }
-
-        spans.erase(spans.begin() + i);
-    }
-}
-
-// Removing noise may have introduced adjacent spans that have the same
-// value. Find and merge them into one span.
-//
-void mergeAdjacentSpans(vector<Span> &spans)
-{
-    for (int i = 0; i < spans.size() - 1;) {
-        if (spans[i].value != spans[i+1].value) {
-            i++;
-            continue;
-        }
-
-        spans[i].length += spans[i+1].value;
-        spans.erase(spans.begin() + i+1);
-    }
-}
-
 // Convert the spans to integral numbers of clocks and then convert
 // each span to the appropriate number of bits.
 //
@@ -107,8 +58,6 @@ vector<Bit> convertSpansToBits(vector<Span> &spans)
     int clock = 0;
     for (int spi = 0; spi < spans.size(); spi++) {
         auto &sp = spans[spi];
-        double clocks = (sp.length * 1000.0) / MS_PER_CLOCK;
-        sp.clocks = int(clocks + 0.5);    
         
         bool sval = sp.value == FreqSpanFilter::Mark;
 
@@ -214,11 +163,12 @@ int main(int argc, char **argv)
     DCFilter dcFilter{ *reader.get(), dcwin };
     ZeroCrossFilter zeroCross{ dcFilter, reader->getSampleRate() };
     FreqSpanFilter freqSpan{ zeroCross };
+    DeNoiseFilter denoise{ freqSpan };
 
     vector<FreqSpanFilter::Span> spans;
     
     while (true) {
-        vector<FreqSpanFilter::Span> chunk = freqSpan.getSpans(4096);
+        vector<FreqSpanFilter::Span> chunk = denoise.getSpans(4096);
         if (chunk.size() == 0) {
             break;
         }
@@ -230,8 +180,6 @@ int main(int argc, char **argv)
 
     cout << spans.size() << " spans" << endl;
 
-    removeNoise(spans);
-    mergeAdjacentSpans(spans);
     vector<Bit> sig = convertSpansToBits(spans);
     vector<Char> text = convertFramesToBytes(sig);
 
