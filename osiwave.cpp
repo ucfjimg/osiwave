@@ -4,80 +4,25 @@
 #include "freqspan.h"
 #include "denoise.h"
 #include "bitstrm.h"
+#include "frameflt.h"
 
-#include <cassert>
-#include <cmath>
-#include <cstdint>
-#include <fstream>
-#include <iomanip>
 #include <iostream>
+#include <vector>
 #include <memory>
-#include <sstream>
 #include <stdexcept>
 #include <string>
-#include <vector>
 
 #include <unistd.h>
-
-using Span = FreqSpanFilter::Span;
 
 using std::cerr;
 using std::cout;
 using std::endl;
-using std::ios;
 using std::runtime_error;
-using std::ifstream;
 using std::string;
-using std::stringstream;
 using std::unique_ptr;
 using std::vector;
 
-const int SAMPLE_RATE = 44100;
-const double SEC_PER_SAMPLE = 1.0 / SAMPLE_RATE;
-const int BAUD_RATE = 300;
-const double MS_PER_CLOCK = 1000.0 / BAUD_RATE;
-
-// a bit, with an associated sample index near where it was decoded
-struct Char {
-    int sample;
-    char ch;
-};
-
-
-// Search for RS-232 frames in the data, and convert those frames into
-// the original bytes.
-//
-vector<Char> convertFramesToBytes(const vector<bool> &sig)
-{
-    vector<Char> out;
-
-    for (int i = 0; i < sig.size() - 11; i++) {
-        // A frame starts after some MARK time, and has a start bit (SPACE),
-        // followed by the byte (lsb first), finally followed by a stop 
-        // bit (MARK)
-        // 
-        if (sig[i] && !sig[i+1] && sig[i+10]) {
-            char b = 0;
-
-            for (int j = 0; j < 8; j++) {
-                if (sig[i+2+j]) {
-                    b |= (1 << j);
-                }
-            }
-
-            if (b == 0x0a || b == 0x0d || (b >= 32 && b <= 126)) {  
-              out.push_back(Char{ 0, b });
-            } else if (b != 0x00) {
-                // Garbage byte, try to resync on the next clock                
-                continue;
-            }
-
-            i += 10;
-        }
-    }
-
-    return out;
-}
+using Span = FreqSpanFilter::Span;
 
 // Print usage and exit
 void usage() 
@@ -133,31 +78,24 @@ int main(int argc, char **argv)
         reader->skip(clip);
     }
 
-
     DCFilter dcFilter{ *reader.get(), dcwin };
     ZeroCrossFilter zeroCross{ dcFilter, reader->getSampleRate() };
     FreqSpanFilter freqSpan{ zeroCross };
     DeNoiseFilter denoise{ freqSpan };
     BitstreamFilter bitstream{ denoise };
+    FrameFilter frames{ bitstream };
 
-    vector<bool> sig;
-    
     while (true) {
-        vector<bool> chunk = bitstream.getBits(4096);
+        vector<char> chunk = frames.getChars(4096);
         if (chunk.size() == 0) {
             break;
         }
 
-        for (auto  t : chunk) {
-            sig.push_back(t);
+        for (char t : chunk) {
+            cout << t;
         }
     }
 
-    vector<Char> text = convertFramesToBytes(sig);
-
-    for (Char ch : text) {
-        cout << ch.ch;
-    }
     cout << endl;
 
     return 0;

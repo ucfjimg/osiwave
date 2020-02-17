@@ -10,4 +10,5 @@ add_executable(osiwave
     freqspan.cpp
     denoise.cpp
     bitstrm.cpp
+    frameflt.cpp
 )
