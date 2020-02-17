@@ -3,6 +3,7 @@
 #include "xcross.h"
 #include "freqspan.h"
 #include "denoise.h"
+#include "bitstrm.h"
 
 #include <cassert>
 #include <cmath>
@@ -37,43 +38,16 @@ const int BAUD_RATE = 300;
 const double MS_PER_CLOCK = 1000.0 / BAUD_RATE;
 
 // a bit, with an associated sample index near where it was decoded
-struct Bit {
-    int sample;
-    bool bit;
-};
-
-// a bit, with an associated sample index near where it was decoded
 struct Char {
     int sample;
     char ch;
 };
 
-// Convert the spans to integral numbers of clocks and then convert
-// each span to the appropriate number of bits.
-//
-vector<Bit> convertSpansToBits(vector<Span> &spans)
-{
-    vector<Bit> sig;
-
-    int clock = 0;
-    for (int spi = 0; spi < spans.size(); spi++) {
-        auto &sp = spans[spi];
-        
-        bool sval = sp.value == FreqSpanFilter::Mark;
-
-        clock += sp.clocks;
-
-        int clk = sp.clocks;
-        while (clk--) { sig.push_back(Bit{ 0, sval }); }
-    }
-
-    return sig;
-}
 
 // Search for RS-232 frames in the data, and convert those frames into
 // the original bytes.
 //
-vector<Char> convertFramesToBytes(const vector<Bit> &sig)
+vector<Char> convertFramesToBytes(const vector<bool> &sig)
 {
     vector<Char> out;
 
@@ -82,17 +56,17 @@ vector<Char> convertFramesToBytes(const vector<Bit> &sig)
         // followed by the byte (lsb first), finally followed by a stop 
         // bit (MARK)
         // 
-        if (sig[i].bit && !sig[i+1].bit && sig[i+10].bit) {
+        if (sig[i] && !sig[i+1] && sig[i+10]) {
             char b = 0;
 
             for (int j = 0; j < 8; j++) {
-                if (sig[i+2+j].bit) {
+                if (sig[i+2+j]) {
                     b |= (1 << j);
                 }
             }
 
             if (b == 0x0a || b == 0x0d || (b >= 32 && b <= 126)) {  
-                out.push_back(Char{ sig[i].sample, b });
+              out.push_back(Char{ 0, b });
             } else if (b != 0x00) {
                 // Garbage byte, try to resync on the next clock                
                 continue;
@@ -164,23 +138,21 @@ int main(int argc, char **argv)
     ZeroCrossFilter zeroCross{ dcFilter, reader->getSampleRate() };
     FreqSpanFilter freqSpan{ zeroCross };
     DeNoiseFilter denoise{ freqSpan };
+    BitstreamFilter bitstream{ denoise };
 
-    vector<FreqSpanFilter::Span> spans;
+    vector<bool> sig;
     
     while (true) {
-        vector<FreqSpanFilter::Span> chunk = denoise.getSpans(4096);
+        vector<bool> chunk = bitstream.getBits(4096);
         if (chunk.size() == 0) {
             break;
         }
 
         for (auto  t : chunk) {
-            spans.push_back(t);
+            sig.push_back(t);
         }
     }
 
-    cout << spans.size() << " spans" << endl;
-
-    vector<Bit> sig = convertSpansToBits(spans);
     vector<Char> text = convertFramesToBytes(sig);
 
     for (Char ch : text) {
