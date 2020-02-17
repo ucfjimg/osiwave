@@ -1,6 +1,7 @@
 #include "wave.h"
 #include "dcfilter.h"
 #include "xcross.h"
+#include "freqspan.h"
 
 #include <cassert>
 #include <cmath>
@@ -15,6 +16,8 @@
 #include <vector>
 
 #include <unistd.h>
+
+using Span = FreqSpanFilter::Span;
 
 using std::cerr;
 using std::cout;
@@ -32,21 +35,6 @@ const double SEC_PER_SAMPLE = 1.0 / SAMPLE_RATE;
 const int BAUD_RATE = 300;
 const double MS_PER_CLOCK = 1000.0 / BAUD_RATE;
 
-// a value decoded from the analog data
-enum Value {
-    Space,   // 1200 hz => zero/space 
-    Mark,    // 2400 hz => one/mark
-    Noise,   // anything else
-};
-
-// a span of one detected value in the analog data
-struct Span {
-    int sample;
-    Value value;
-    double length;
-    int clocks;
-};
-
 // a bit, with an associated sample index near where it was decoded
 struct Bit {
     int sample;
@@ -59,65 +47,14 @@ struct Char {
     char ch;
 };
 
-// Convert a data stream value to a string
-//
-string valueStr(Value v) 
-{
-    switch (v) {
-    case Space: return "space";
-    case Mark:  return "mark";
-    case Noise:return "noise";
-    }
-
-    return "?unknown";
-}
-
-
-// From zero crossings, compute contiguous spans of our interesting frequencies.
-// 1200 hz (or thereabouts) == zero (SPACE)
-// 2400 hz == one (MARK)
-//
-vector<Span> buildFrequencySpans(const vector<double> &zeroCrossings)
-{
-    vector<Span> spans;
-
-    Value value = Noise;
-    double start = 0;
-
-    for (int i = 1; i < zeroCrossings.size(); i++) {
-        double dt = zeroCrossings[i] - zeroCrossings[i-1];
-        double freq = 1.0 / dt;
-
-        Value nextValue = Noise;
-
-        // The nominal frequencies are 1200/2400 hz, but things
-        // like tape speed, warble, and the waveform not being exactly 
-        // centered mean we need to look at ranges.
-        //
-        if (freq > 2100 && freq < 2550) {
-            nextValue = Mark;
-        } else if (freq >= 1100 && freq < 1550) {
-            nextValue = Space;
-        }
-
-        if (nextValue != value) {
-            spans.push_back(Span{ 0, value, zeroCrossings[i-1] - start });
-            value = nextValue;
-            start = zeroCrossings[i-1];
-        }
-    }
-
-    return spans;
-}
-
 // Remove noise. Attempt to figure out what the noise value should be
 // by looking on either side and seeing which side would make a better
 // clock pulse width by adding the noise duration to it.
 //
-void removeNoise(vector<Span> &spans) 
+void removeNoise(vector<FreqSpanFilter::Span> &spans) 
 {
     for (int i = 1; i < spans.size()-1;) {
-        if (spans[i].value != Noise) {
+        if (spans[i].value != FreqSpanFilter::Noise) {
             i++;
             continue;
         }
@@ -173,12 +110,12 @@ vector<Bit> convertSpansToBits(vector<Span> &spans)
         double clocks = (sp.length * 1000.0) / MS_PER_CLOCK;
         sp.clocks = int(clocks + 0.5);    
         
-        bool sval = sp.value == Mark;
+        bool sval = sp.value == FreqSpanFilter::Mark;
 
         clock += sp.clocks;
 
         int clk = sp.clocks;
-        while (clk--) { sig.push_back(Bit{ sp.sample, sval }); }
+        while (clk--) { sig.push_back(Bit{ 0, sval }); }
     }
 
     return sig;
@@ -276,26 +213,23 @@ int main(int argc, char **argv)
 
     DCFilter dcFilter{ *reader.get(), dcwin };
     ZeroCrossFilter zeroCross{ dcFilter, reader->getSampleRate() };
+    FreqSpanFilter freqSpan{ zeroCross };
 
-    vector<double> zeroCrossings;
+    vector<FreqSpanFilter::Span> spans;
     
     while (true) {
-        vector<double> chunk = zeroCross.getTimestamps(4096);
+        vector<FreqSpanFilter::Span> chunk = freqSpan.getSpans(4096);
         if (chunk.size() == 0) {
             break;
         }
 
-        for (double t : chunk) {
-            zeroCrossings.push_back(t);
+        for (auto  t : chunk) {
+            spans.push_back(t);
         }
     }
 
-    if (zeroCrossings.size() == 0) {
-        cout << "no data found (no zero crossings)" << endl;
-        return 1;
-    }
+    cout << spans.size() << " spans" << endl;
 
-    vector<Span> spans = buildFrequencySpans(zeroCrossings);
     removeNoise(spans);
     mergeAdjacentSpans(spans);
     vector<Bit> sig = convertSpansToBits(spans);
