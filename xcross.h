@@ -8,14 +8,17 @@ class DCFilter;
 
 class ZeroCrossFilter {
 public:
-    ZeroCrossFilter(DCFilter &dc, int sampleRate);
+    ZeroCrossFilter(DCFilter &dc, int sampleRate, bool negate);
 
+    void trace();
     std::vector<double> getTimestamps(int ncross);
 
 private:
     const uint32_t WINDOW = 4096;
 
     DCFilter& dc_;
+    bool trace_;
+    bool negate_;
     double secPerSample_;
     std::vector<int16_t> samples_;
     int nextSampleIdx_;

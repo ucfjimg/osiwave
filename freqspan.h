@@ -1,6 +1,7 @@
 #ifndef FREQSPAN_H
 #define FREQSPAN_H
 
+#include <string>
 #include <vector>
 
 class ZeroCrossFilter;
@@ -14,6 +15,8 @@ public:
         Noise,   // anything else
     };
 
+    static std::string valueName(Value v);
+
     // a span of one detected value in the analog data
     struct Span {
         Value value;
@@ -23,12 +26,14 @@ public:
 
     FreqSpanFilter(ZeroCrossFilter &zc);
 
+    void trace();
     std::vector<Span> getSpans(int nspans);
 
 private:
     const int WINDOW = 1024;
     
     ZeroCrossFilter &zc_;
+    bool trace_;
     bool eof_;
     std::vector<double> zeroCrossings_;
     int zeroCrossingIdx_;

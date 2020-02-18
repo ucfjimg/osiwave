@@ -2,18 +2,41 @@
 
 #include "xcross.h"
 
+#include <iomanip>
+#include <iostream>
+#include <string>
 #include <vector>
 
+using std::cout;
+using std::endl;
+using std::string;
 using std::vector;
+
+string FreqSpanFilter::valueName(Value v)
+{
+    switch(v) {
+        case Mark: return "mark";
+        case Space: return "space";
+        case Noise: return "noise";
+    }
+}
+
 
 FreqSpanFilter::FreqSpanFilter(ZeroCrossFilter &zc)
     : zc_(zc)
+    , trace_(false)
     , eof_(false)
     , zeroCrossingIdx_(0)
 {
     zeroCrossings_ = zc_.getTimestamps(WINDOW);
     prevTimestamp_ = getNextZeroCrossing();
     currTimestamp_ = getNextZeroCrossing();
+}
+
+// Enable tracing
+void FreqSpanFilter::trace()
+{
+    trace_ = true;
 }
 
 // Given zero crossings from the stream, make spans of similar frequency
@@ -27,7 +50,15 @@ vector<FreqSpanFilter::Span> FreqSpanFilter::getSpans(int nspans)
     double start = prevTimestamp_;
     Value value = Noise;
 
+    if (trace_) {
+        cout << "frequency spans" << endl;
+        cout << "prev " << prevTimestamp_ << endl;
+    }
+
     while (spans.size() < nspans && !eof_) {
+        if (trace_) {
+            cout << "curr " << currTimestamp_ << endl;
+        }
         double dt = currTimestamp_ - prevTimestamp_;
         double freq = 1.0 / dt;
 
@@ -45,8 +76,15 @@ vector<FreqSpanFilter::Span> FreqSpanFilter::getSpans(int nspans)
         
         if (nextValue != value) {
             if (!first) {
-                spans.push_back(Span{ value, currTimestamp_ - start});
-            } else {
+                double dt = currTimestamp_ - start;
+                if (trace_) {
+                    cout << "  " << freq << "  " << valueName(value) << " -> " << valueName(nextValue) << dt << endl;
+                }
+                spans.push_back(Span{ value, dt });
+            } else {  
+                if (trace_) {
+                    cout << "first" << endl;
+                }
                 first = false;
             }
             value = nextValue;

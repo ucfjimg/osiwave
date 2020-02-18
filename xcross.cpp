@@ -9,8 +9,10 @@ using std::cout;
 using std::endl;
 using std::vector;
 
-ZeroCrossFilter::ZeroCrossFilter(DCFilter &dc, int sampleRate)
+ZeroCrossFilter::ZeroCrossFilter(DCFilter &dc, int sampleRate, bool negate)
     : dc_(dc)
+    , trace_(false)
+    , negate_(negate)
     , secPerSample_(1.0 / sampleRate)
     , nextSampleIdx_(0)
     , sampleTime_(-1)
@@ -18,6 +20,12 @@ ZeroCrossFilter::ZeroCrossFilter(DCFilter &dc, int sampleRate)
 {
     samples_ = dc_.readSamples(WINDOW);
     prevSample_ = getNextSample();
+}
+
+// Enable tracing
+void ZeroCrossFilter::trace()
+{
+  trace_ = true;
 }
 
 // Given sample data, find low-to-high zero crossings and return
@@ -29,6 +37,10 @@ vector<double> ZeroCrossFilter::getTimestamps(int ncross)
 
     int l = prevSample_;
     int r = getNextSample();
+
+    if (trace_) {
+        cout << "zero crossings:" << endl;
+    }
 
     while (out.size() < ncross && !eof_) {        
         // if there are a span of zeroes, put the crossing in the middle
@@ -42,18 +54,38 @@ vector<double> ZeroCrossFilter::getTimestamps(int ncross)
             }
 
             double t = secPerSample_ *  (s + zeroes * 0.5);
+            if (trace_) {
+                cout << "  " << s << "  " << t << "(Z)" << endl;
+            }
             out.push_back(t);
 
             r = getNextSample();
             continue;
         }
 
-        if (l < 0 && r > 0) {
-            double num = -l;
-            double den = r - l;
-            double t = num / den;
-            t = (sampleTime_ + t) * secPerSample_;
+        bool cross = false;
+        double t = 0;
+        if (negate_) {
+            if (l > 0 && r < 0) {
+                double num = l;
+                double den = l - r;
+                double t = num / den;
+                cross = true;
+            }
+        } else {
+            if (l < 0 && r > 0) {
+                double num = -l;
+                double den = r - l;
+                t = num / den;
+                cross = true;
+            }
+        }
 
+        if (cross) {
+            t = (sampleTime_ + t) * secPerSample_;
+            if (trace_) {
+                cout << "  " << sampleTime_ << "  " << t << "(X)" << endl;
+            }
             out.push_back({ t });
         }
 

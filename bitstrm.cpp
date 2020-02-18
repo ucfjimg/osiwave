@@ -12,15 +12,26 @@ BitstreamFilter::BitstreamFilter(DeNoiseFilter &dn)
     : dn_(dn)
     , spanIdx_(0)
     , eof_(false)
+    , trace_(false)
 {
     spans_ = dn_.getSpans(WINDOW);
     span_ = getNextSpan();
+}
+
+// turn on tracing
+void BitstreamFilter::trace()
+{
+    trace_ = true;
 }
 
 // Expand spans into individual bits
 vector<bool> BitstreamFilter::getBits(int nbits)
 {
     vector<bool> bits;
+
+    if (trace_) {
+      cout << "bits: ";
+    }
 
     while (bits.size() < nbits && !eof_) {
         while (span_.clocks == 0 && !eof_) {
@@ -35,8 +46,15 @@ vector<bool> BitstreamFilter::getBits(int nbits)
           exit(1);
         }
 
+        if (trace_) {
+            cout << (span_.value == FreqSpanFilter::Mark);
+        }
         bits.push_back(span_.value == FreqSpanFilter::Mark);
         span_.clocks--;
+    }
+
+    if (trace_) {
+        cout << endl;
     }
 
     return bits;

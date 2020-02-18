@@ -8,6 +8,7 @@ public:
     using Span = DeNoiseFilter::Span;
     BitstreamFilter(DeNoiseFilter &dn);
 
+    void trace();
     std::vector<bool> getBits(int nbits);
     
 private:
@@ -17,6 +18,7 @@ private:
     std::vector<Span> spans_;
     int spanIdx_;
     bool eof_;
+    bool trace_;
 
     Span span_;
     
